@@ -1,5 +1,12 @@
-local avoid = { "minecraft:water", "minecraft:lava" }
-local garbage = { "minecraft:dirt", "minecraft:cobblestone" }
+local FUEL_THRESHOLD = 10
+local avoid = { "minecraft:water", "minecraft:lava", "minecraft:dirt", "minecraft:grass_block", "minecraft:stone", "minecraft:cobblestone", "minecraft:diorite", "twigs:pebble", "minecraft:granite", "minecraft:gravel", "minecraft:sand", "byg:soapstone", "minecraft:flint", "upgrade_aquatic:embedded_ammonite", "minecraft:torch", "minecraft:deepslate", "minecraft:cobbled_deepslate", "twigs:rhyolite", "forbidden_arcanus:darkstone", "tetra:geode", "silentgear:bort", "minecraft:tuff"}
+local garbage = avoid
+local fallingEntities = { "minecraft:sand", "minecraft:gravel" }
+local isFallingEntity = {}
+for _, v in ipairs(fallingEntities) do
+    isFallingEntity[v] = true
+end
+local home = { x = 0, y = 0, z = 0, d = "N" }
 local filler = 1 -- slot with cobble to fill holes
 local directions = { "N", "E", "S", "W" }
 local authorizedFuelSource = { "minecraft:coal" }
@@ -38,6 +45,20 @@ function miner.inspectUpDown()
             direction.dig()
         end
     end
+    -- Verify if turtle is able to continue
+    if not miner.verifyInventoryLevel() or not miner.verifyFuelLevel() then
+        miner.travelTo(home)
+        os.reboot()
+    end
+end
+
+function miner.verifyFuelLevel()
+    if turtle.getFuelLevel() - math.abs(miner.position.x) + math.abs(miner.position.y) + math.abs(miner.position.z) < FUEL_THRESHOLD then
+        if not miner.refuel() then
+            return false
+        end
+    end
+    return true
 end
 
 -- Refuel the turtle if able
@@ -46,7 +67,7 @@ function miner.refuel()
     local inventory = miner.scanInventory()
     local ok = false
     for _, item in ipairs(authorizedFuelSource) do
-        local it = inventory[item]
+        local it = inventory.items[item]
         if it then
             turtle.select(it[1].pos)
             ok = turtle.refuel(it[1].count)
@@ -58,7 +79,7 @@ end
 
 function miner.searchInventory(item)
     local inventory = miner.scanInventory()
-    return inventory[item]
+    return inventory.items[item]
 end
 
 function miner.mineRectangle(x, y)
@@ -90,12 +111,12 @@ end
 -- position {x = int, y = int, z = int, d = "N"}
 -- direction is a coordinal direction between N, S, E, W
 -- return true if travel was ok, else return false
-function miner.travelBy(position)
-    local ok, _ = miner.moveX(position.x)
+function miner.travelBy(position, force, action)
+    local ok, _ = miner.moveX(position.x, force, action)
     if ok then
-        ok, _ = miner.moveY(position.y)
+        ok, _ = miner.moveY(position.y, force, action)
         if ok then
-            ok, _ = miner.moveZ(position.z)
+            ok, _ = miner.moveZ(position.z, force, action)
             if ok then
                 return miner.setDirection(position.d)
             end
@@ -107,13 +128,13 @@ end
 -- position {x = int, y = int, z = int, direction = str}
 -- direction is a coordinal direction between N, S, E, W
 -- return true if travel was ok, else return false
-function miner.travelTo(position)
+function miner.travelTo(position, force, action)
     local map = {}
     map.x = position.x - miner.position.x
     map.y = position.y - miner.position.y
     map.z = position.z - miner.position.z
     map.d = position.d
-    return miner.travelBy(map)
+    return miner.travelBy(map, force, action)
 end
 
 -- startPos = { x = 1, y = 1 }
@@ -146,7 +167,8 @@ function miner.followMap(map, startPos)
 end
 
 -- Move on X axis by given distance
-function miner.moveX(distance)
+function miner.moveX(distance, force, action)
+    if distance == 0 then return true end
     local posUpdate
     if distance > 0 then
         miner.setDirection("N")
@@ -156,16 +178,18 @@ function miner.moveX(distance)
         posUpdate = 1
     end
     repeat
-        if miner.goForward() then
+        if miner.goForward(force, action) then
             distance = distance + posUpdate
         else
             return distance
         end
     until distance == 0
+    return distance
 end
 
 -- Move on Y axis by given distance
-function miner.moveY(distance)
+function miner.moveY(distance, force, action)
+    if distance == 0 then return true end
     local posUpdate
     if distance > 0 then
         miner.setDirection("E")
@@ -175,17 +199,37 @@ function miner.moveY(distance)
         posUpdate = 1
     end
     repeat
-        if miner.goForward() then
+        if miner.goForward(force, action) then
             distance = distance + posUpdate
         else
             return distance
         end
     until distance == 0
+    return distance
 end
 
 -- Move on Z axis by given distance
-function miner.moveZ(distance)
-    -- TODO
+function miner.moveZ(distance, force, action)
+    if distance == 0 then return true end
+    local posUpdate, movement, dig
+    if distance > 0 then
+        movement = turtle.up
+        dig = turtle.digUp
+        posUpdate = - 1
+    elseif distance < 0 then
+        movement = turtle.down
+        dig = turtle.digDown
+        posUpdate = 1
+    end
+    repeat
+        dig()
+        if movement() then
+            distance = distance + posUpdate
+            miner.position.z = miner.position.z - posUpdate
+            if action then action() end
+        end
+    until distance == 0
+    return distance
 end
 
 -- Turn the turtle left or right
@@ -205,11 +249,11 @@ function miner.turn(side)
         end
     end
     if ind == 0 then
-        miner.position = "W"
+        miner.position.d = "W"
     elseif ind == 5 then
-        miner.position = "N"
+        miner.position.d = "N"
     else
-        miner.position = directions[ind]
+        miner.position.d = directions[ind]
     end
     return ok
 end
@@ -222,7 +266,7 @@ function miner.setDirection(direction)
     local targetDirIndex = directionIndex[direction]
     local turnNum = targetDirIndex - currentDirIndex
     if math.abs(turnNum) == 3 then
-        turnNum = turnNum // -3
+        turnNum = math.floor(turnNum / -3)
     end
     repeat
         if turnNum < 0 then
@@ -241,6 +285,7 @@ function miner.setDirection(direction)
             end
         end
     until turnNum == 0
+    miner.position.d = direction
     return true
     -- index = currentDirIndex + (turnNum)
     -- print("turnNum", turnNum)
@@ -263,13 +308,7 @@ end
 -- Return true if turtle successfully moved forward, else return false
 function miner.goForward(force, action)
     if force then
-        local has_block, _ = turtle.inspect()
-        if has_block then
-            local ok, _ = turtle.dig()
-            if not ok then
-                return ok
-            end
-        end
+        local ok = miner.mine()
     end
     local ok, _ = turtle.forward()
     if ok then
@@ -277,6 +316,24 @@ function miner.goForward(force, action)
         miner.updatePosition()
     end
     if action then action() end
+    return ok
+end
+
+-- Mine block in front of the turtle.
+-- Take gravel/sand piles into account
+function miner.mine()
+    local has_block, block = turtle.inspect()
+    local ok
+    if isFallingEntity[block.name] then
+        while isFallingEntity[block.name] do
+            ok = turtle.dig()
+            if ok then
+                has_block, block = turtle.inspect()
+            end
+        end
+    else
+        ok = turtle.dig()
+    end
     return ok
 end
 
@@ -309,7 +366,7 @@ local function mine()
 end
 
 local function move()
-    inspectUpDown()
+    miner.inspectUpDown()
     turtle.dig()
     turtle.forward()
     local ok, info = turtle.inspect()
@@ -357,20 +414,20 @@ end
 
 -- Get item detail of all turtle slots group by item and list of all empty slot
 -- ex: { "empty" = {1, 5, 16},
---       "minecraft:iron": {{pos=2, count=12, left=52},
---                          {pos=3, count=15, left=48}}
+--       "items" = { "minecraft:iron": {{pos=2, count=12, left=52},
+--                          {pos=3, count=15, left=48}}}
 --     }
 function miner.scanInventory()
-    local inventory = { empty = {} }
+    local inventory = { empty = {}, items = {} }
     local fns = {}
     for i = 1, 16 do
         local fn = function()
             local slot = turtle.getItemDetail(i)
             if slot then
-                if not inventory[slot.name] then
-                    inventory[slot.name] = {}
+                if not inventory.items[slot.name] then
+                    inventory.items[slot.name] = {}
                 end
-                table.insert(inventory[slot.name], {
+                table.insert(inventory.items[slot.name], {
                     pos = i,
                     count = slot.count,
                     left = turtle.getItemSpace(i)
@@ -387,9 +444,9 @@ end
 
 -- Group turtle slots by item
 function miner.stackInventory(inventory)
-    inventory = inventory or scanInventory()
+    inventory = inventory or miner.scanInventory()
     -- For each type of item (ex: iron)
-    for name, info in pairs(inventory) do
+    for name, info in pairs(inventory.items) do
         -- For each slot containing this type of item
         for i = 1, #info do
             -- Test if this slot is empty
@@ -397,7 +454,7 @@ function miner.stackInventory(inventory)
             if info[i] then
                 local n = 1
                 -- While room in slot and another slot contains this item
-                while info[i].left > 0 and info[n + 1] do
+                while info[i] and info[i].left > 0 and info[n + 1] do
                     turtle.select(info[n + 1].pos)
                     if info[n + 1].count <= info[i].left then
                         -- if there is enough item, transfer whole n+1 slot
@@ -425,25 +482,63 @@ function miner.stackInventory(inventory)
     end
 end
 
--- Return true if turtle inventory contains at lE one free slot
+-- Return true if turtle inventory contains at least one free slot
 function miner.isInventorySlotsFull()
     local status = true
-    local fns
+    local fns = {}
     for i = 1, 16 do
         local fn = function()
             if status and turtle.getItemCount(i) == 0 then
-                return false
-            else
-                os.pullEvent("nil")
+                status = false
             end
         end
         table.insert(fns, fn)
     end
-    parallel.waitForAny(table.unpack(fns))
+    parallel.waitForAll(table.unpack(fns))
     return status
+end
+
+-- Verify inventory level and try to compact it, if still full, drop garbage
+-- and if no garbage was dropped then return false
+function miner.verifyInventoryLevel()
+    if miner.isInventorySlotsFull() then
+        miner.dropGarbage()
+        miner.stackInventory()
+        if miner.isInventorySlotsFull() then
+            return false
+        end
+    end
+    return true
+end
+
+-- Drop all items in dict isTrash from turtle inventory
+-- If at least one slot was drop, return true
+function miner.dropGarbage()
+    atLeastOne = false
+    local fns = {}
+    for i = 1, 16 do
+        local slot = turtle.getItemDetail(i)
+        if slot then
+            if isTrash[slot.name] then
+                turtle.select(i)
+                turtle.drop()
+                atLeastOne = true
+            end
+        end
+    end
+    return atLeastOne
 end
 
 -- Faire un tunnel de 1 block:
 -- inspect creuse inspects creuse...
 -- si trou on rebouche et on dig a droite ou a gauche, sinon demi tour
-return miner
+-- return miner
+local ok, data = turtle.inspectDown()
+print("fuel: ", turtle.getFuelLevel())
+miner.refuel()
+for i=1,16 do
+    miner.travelBy({x=32, y=1, z=0}, true, miner.inspectUpDown)
+    miner.travelBy({x=-32, y=1, z=0, d="N"}, true, miner.inspectUpDown)
+end
+miner.travelTo(home)
+-- miner.dropGarbage()
