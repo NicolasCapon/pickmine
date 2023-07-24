@@ -1,8 +1,6 @@
-local gps_tools    = require("src.gps_tools")
-local turtle_tools = require("src.turtle_tools")
-local conf         = require("src.config")
-local actions      = require("src.actions")
-local config       = require("config")
+local gps_tools    = require("gps_tools")
+local turtle_tools = require("turtle_tools")
+local actions      = require("actions")
 
 -- Unserialize tasks and turtle position to a variable
 -- See also Miner:saveState
@@ -46,9 +44,15 @@ function Miner:addTask(task)
     table.insert(self.tasks, task)
 end
 
+function Miner:removeAllTasks()
+    self.tasks = {}
+end
+
 -- Execute all tasks and update task list
 function Miner:execTasks()
     for key, task in pairs(self.tasks) do
+        -- In case tasks become empty due to some actions
+        if #self.tasks == 0 then break end
         self.jobStartingPos = {
             x = self.position.x,
             y = self.position.y,
@@ -113,29 +117,17 @@ function Miner:resumePendingTasks()
     end
 end
 
--- Check if miner has enough fuel to go to home position. Refuel if necessary
-function Miner:verifyFuelLevel()
-    local consumption = gps_tools.getFuelBetweenPositions(self.home, self.position)
-    local fuelLeft = turtle.getFuelLevel() - consumption
-    if fuelLeft < config.FUEL_THRESHOLD then
-        if not turtle_tools.refuelTo(consumption) then
-            return false
-        end
-    end
-    return true
-end
-
 -- Travel by given positions and stand in given direction
 -- First travel on X then Y, then Z and finally set direction
 -- position {x = int, y = int, z = int, d = "N"}
 -- direction is a coordinal direction between N, S, E, W
 -- return true if travel was ok, else return false
 function Miner:travelBy(position, ...)
-    local ok, _ = self:moveX(position.x, ...)
+    local ok, _ = self:move("X", position.x, ...)
     if ok then
-        ok, _ = self:moveY(position.y, ...)
+        ok, _ = self:move("Y", position.y, ...)
         if ok then
-            ok, _ = self:moveZ(position.z, ...)
+            ok, _ = self:move("Z", position.z, ...)
             if ok then
                 return self:setDirection(position.d)
             end
@@ -152,6 +144,7 @@ function Miner:travelTo(position, ...)
     return self:travelBy(relativePos, ...)
 end
 
+-- Experimental feature
 -- startPos = { x = 1, y = 1 }
 -- map = { { ">", ">", ">", ">", "v"},
 --         { "<", "v", "<", "<", "<"},
@@ -183,120 +176,53 @@ end
 
 function Miner:move(axis, distance, ...)
     if distance == 0 then return true end
-    local posUpdate
-    local movement
+    local posUpdate, movement, miningDir
     local dirs = {
         X = {
-            pos = { name = "N", movement = turtle.forward },
-            neg = { name = "S", movement = turtle.forward }
+            pos = { name = "N", movement = turtle.forward, mine = "forward" },
+            neg = { name = "S", movement = turtle.forward, mine = "forward" }
         },
         Y = {
-            pos = { name = "E", movement = turtle.forward },
-            neg = { name = "W", movement = turtle.forward }
+            pos = { name = "E", movement = turtle.forward, mine = "forward" },
+            neg = { name = "W", movement = turtle.forward, mine = "forward" }
         },
         Z = {
-            pos = { name = "U", movement = turtle.up },
-            neg = { name = "D", movement = turtle.down }
+            pos = { name = "U", movement = turtle.up, mine = "up" },
+            neg = { name = "D", movement = turtle.down, mine = "down" }
         }
     }
     if distance > 0 then
-        self:setDirection(dirs[axis].pos)
+        self:setDirection(dirs[axis].pos.name)
         movement = dirs[axis].pos.movement
         posUpdate = -1
+        miningDir = dirs[axis].pos.mine
     elseif distance < 0 then
-        self:setDirection(dirs[axis].neg)
+        self:setDirection(dirs[axis].neg.name)
         movement = dirs[axis].neg.movement
         posUpdate = 1
+        miningDir = dirs[axis].neg.mine
     end
     while distance ~= 0 do
         if self.force then
-            turtle_tools.mine(direction) -- TODO
+            turtle_tools.mine(miningDir)
         end
         if movement() then
             distance = distance + posUpdate
             local currentPos = self.position[dirs[axis].name]
-            currentPos = currentPos - posUpdate
+            self.position[dirs[axis].name] = currentPos - posUpdate
             self:saveState()
-            -- execute additionnal functions passed in varargs
-            local varargs = { ... }
-            for _, action in pairs(varargs) do
-                actions[action]()
-            end
+            self:doActions(...)
         end
     end
     return distance
 end
 
--- TODO factorize
--- Move on X axis by given distance
-function Miner:moveX(distance, ...)
-    if distance == 0 then return true end
-    local posUpdate
-    if distance > 0 then
-        self:setDirection("N")
-        posUpdate = -1
-    elseif distance < 0 then
-        self:setDirection("S")
-        posUpdate = 1
+-- execute additionnal action functions passed in varargs by their name (string)
+function Miner:doActions(...)
+    local varargs = { ... }
+    for _, action in pairs(varargs) do
+        actions[action](self)
     end
-    repeat
-        if self:goForward(...) then
-            distance = distance + posUpdate
-        else
-            return distance
-        end
-    until distance == 0
-    return distance
-end
-
--- Move on Y axis by given distance
-function Miner:moveY(distance, ...)
-    if distance == 0 then return true end
-    local posUpdate
-    if distance > 0 then
-        self:setDirection("E")
-        posUpdate = -1
-    elseif distance < 0 then
-        self:setDirection("W")
-        posUpdate = 1
-    end
-    repeat
-        if self:goForward(...) then
-            distance = distance + posUpdate
-        else
-            return distance
-        end
-    until distance == 0
-    return distance
-end
-
--- Move on Z axis by given distance
-function Miner:moveZ(distance, ...)
-    if distance == 0 then return true end
-    local posUpdate, movement, direction
-    if distance > 0 then
-        movement = turtle.up
-        direction = "up"
-        posUpdate = -1
-    elseif distance < 0 then
-        movement = turtle.down
-        direction = "down"
-        posUpdate = 1
-    end
-    while distance > 0 do
-        self:mine(direction)
-        if movement() then
-            distance = distance + posUpdate
-            self.position.z = self.position.z - posUpdate
-            self:saveState()
-            -- execute additionnal functions passed in varargs
-            local varargs = { ... }
-            for _, action in pairs(varargs) do
-                actions[action]()
-            end
-        end
-    end
-    return distance
 end
 
 -- Turn the turtle left or right
@@ -331,6 +257,7 @@ function Miner:setDirection(direction)
     if not direction then return true end
     local currentDirIndex = gps_tools.directionIndex[self.position.d]
     local targetDirIndex = gps_tools.directionIndex[direction]
+    if not targetDirIndex then return true end
     local turnNum = targetDirIndex - currentDirIndex
     if math.abs(turnNum) == 3 then
         turnNum = math.floor(turnNum / -3)
@@ -355,40 +282,6 @@ function Miner:setDirection(direction)
     self.position.d = direction
     self:saveState()
     return true
-end
-
--- Move turtle forward
--- force (boolean) if the turtle need to dig before moving
--- ... (list of fn) fonctions to call after turtle has moved
--- Return true if turtle successfully moved forward, else return false
-function Miner:goForward(...)
-    if self.force then
-        turtle_tools.mine()
-    end
-    local ok, _ = turtle.forward()
-    if ok then
-        self:updateXYPosition()
-    end
-    -- execute additionnal functions passed in varargs
-    local varargs = { ... }
-    for _, action in pairs(varargs) do
-        actions[action]()
-    end
-    return ok
-end
-
--- Update miner position according to current direction after a turtle.forward
-function Miner:updateXYPosition()
-    if self.position.d == "N" then
-        self.position.x = self.position.x + 1
-    elseif self.position.d == "S" then
-        self.position.x = self.position.x - 1
-    elseif self.position.d == "E" then
-        self.position.y = self.position.y + 1
-    elseif self.position.d == "W" then
-        self.position.y = self.position.y - 1
-    end
-    self:saveState()
 end
 
 return Miner

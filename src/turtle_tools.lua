@@ -1,6 +1,8 @@
 local config = require("src.config")
 local lib = {}
 
+-- A collection of usefull functions for handling turtles
+
 -- Get item detail of all turtle slots group by item and list of all empty slot
 -- ex: { "empty" = {1, 5, 16},
 --       "items" = { "minecraft:iron": {{pos=2, count=12, left=52},
@@ -87,31 +89,13 @@ function lib.isInventorySlotsFull()
     return status
 end
 
--- Drop all items in dict isTrash from turtle inventory
--- If at least one slot was drop, return true
--- Note: cannot use parallel since select and drop are not executed at the
--- same time
-function lib.dropGarbage()
-    local atLeastOne = false
-    for i = 1, 16 do
-        local slot = turtle.getItemDetail(i)
-        if slot then
-            if config.isTrash[slot.name] then
-                turtle.select(i)
-                turtle.drop()
-                atLeastOne = true
-            end
-        end
-    end
-    return atLeastOne
-end
-
 -- Return the minimum number of coal to have given level of fuel
 function lib.getCoalNumForFuelLevel(fuel)
     return math.ceil(fuel / 80)
 end
 
--- Refuel the turtle to given lvl at minimum (default is math.huge)
+-- Refuel the turtle to given lvl at minimum (default is math.huge), using fuel
+-- source from items in inventory. see config.authorizedFuelSource
 -- Return tuple ok, fuelLevel
 function lib.refuelTo(lvl)
     lvl = lvl or math.huge
@@ -195,6 +179,37 @@ function lib.dropGarbage()
         end
     end
     return atLeastOne
+end
+
+-- Select turtle slot by item name, if item exists in turtle inventory, select
+-- first found slot
+-- Return true if selected, nil or false otherwise
+function lib.selectItemByName(name)
+    local bucket = lib.searchInventory(name) 
+    if bucket then
+        return turtle.select(bucket[1].pos)
+    end
+end
+
+-- Scan up, down and forward for lava, if found then try to select a bucket and
+-- collect lava
+-- Return true if lava was successfully collected, nil or false otherwise
+function lib.collectLava()
+    local ok = false
+    local directions = {
+        up = { inspect = turtle.inspectUp, place = turtle.placeUp },
+        down = { inspect = turtle.inspectDown, place = turtle.placeDown },
+        forward = { inspect = turtle.inspect, place = turtle.place }
+    }
+    for _, action in pairs(directions) do
+        local has_block, block = action.inspect()
+        if has_block and block.name == "minecraft:lava" then
+            if lib.selectItemByName("minecraft:bucket") then
+                ok, _ = action.place()
+            end
+        end
+    end
+    return ok
 end
 
 return lib

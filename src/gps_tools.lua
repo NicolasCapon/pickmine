@@ -1,5 +1,7 @@
 local lib = {}
 
+-- Set of function to handle coordinates in a 3D space
+
 -- cardinal directions
 lib.directions = { "N", "E", "S", "W" }
 lib.directionIndex = {}
@@ -30,7 +32,7 @@ end
 -- Get fuel level to travel from current position to given position.
 -- If no position was given, take home position as default
 function lib.getFuelBetweenPositions(targetPos, currentPos)
-    return getFuelForPosition(getRelativeDistance(targetPos, currentPos))
+    return lib.getFuelForPosition(lib.getRelativeDistance(targetPos, currentPos))
 end
 
 -- add a position to given position (sum of 2 positions)
@@ -41,11 +43,6 @@ function lib.addPosition(pos, addedPos)
     sum.z = pos.z + (addedPos.z or 0)
     sum.d = addedPos.d or pos.d
     return sum
-end
-
--- Return the minimum number of coal to have given level of fuel
-function lib.getCoalNumForFuelLevel(fuel)
-    return math.ceil(fuel / 80)
 end
 
 return lib
