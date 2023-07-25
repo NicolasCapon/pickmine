@@ -1,4 +1,4 @@
-local config = require("src.config")
+local config = require("config")
 local lib = {}
 
 -- A collection of usefull functions for handling turtles

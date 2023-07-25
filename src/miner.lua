@@ -8,8 +8,19 @@ local function loadState()
     local file = io.open("state.txt", "r")
     local state
     if file then
-        state = file:read(textutils.serialize(state))
+        state = textutils.unserialize(file:read())
         file:close()
+        -- Sort unserialized tasks table
+        local indexes = {}
+        for key, value in pairs(state.tasks) do
+            table.insert(indexes, key)
+        end
+        table.sort(indexes)
+        local sorted = {}
+        for k, value in pairs(indexes) do
+            table.insert(sorted, state.tasks[value])
+        end
+        state.tasks = sorted
     end
     return state
 end
@@ -44,6 +55,7 @@ function Miner:addTask(task)
     table.insert(self.tasks, task)
 end
 
+-- Remove all pending tasks
 function Miner:removeAllTasks()
     self.tasks = {}
 end
@@ -52,7 +64,7 @@ end
 function Miner:execTasks()
     for key, task in pairs(self.tasks) do
         -- In case tasks become empty due to some actions
-        if #self.tasks == 0 then break end
+        if self:getTasksLength() == 0 then break end
         self.jobStartingPos = {
             x = self.position.x,
             y = self.position.y,
@@ -60,9 +72,10 @@ function Miner:execTasks()
             d = self.position.d
         }
         -- call function on Miner by its name and give it params
-        self[task.fn](table.unpack(task.params))
+        self[task.fn](self, table.unpack(task.params))
         -- Once task is complete, set it to nil
         self.tasks[key] = nil
+        self:saveState()
     end
 end
 
@@ -83,9 +96,21 @@ function Miner:getTasksFuelAndPos()
     return requiredFuel, futurPos
 end
 
+-- Return number of tasks for current miner.
+-- This function was created because we dynamically remove element during
+-- execution, perturbing indexes of the table
+-- TODO improve ?
+function Miner:getTasksLength()
+    local cpt = 0
+    for k, v in pairs(self.tasks) do
+        cpt = cpt + 1
+    end
+    return cpt
+end
+
 -- Return true if Miner has at least one pending task
 function Miner:isBusy()
-    return #self.tasks > 0
+    return next(self.tasks) ~= nil
 end
 
 -- Serialize tasks and turtle position to a file
@@ -98,7 +123,7 @@ function Miner:saveState()
             force = self.force,
             jobStartingPos = self.jobStartingPos
         }
-        file:write(textutils.serialize(state))
+        file:write(textutils.serialize(state, { compact = true }))
         file:close()
     end
 end
@@ -107,14 +132,63 @@ end
 -- interrupted task
 function Miner:resumePendingTasks()
     if self:isBusy() then
-        if self.tasks[1].fn == "travelBy" then
+        local firstTask
+        for k, value in pairs(self.tasks) do
+            firstTask = value
+            break
+        end
+        if firstTask.fn == "travelBy" then
             -- Only update the first task which was interrupted
             -- For travelBy task, update the position with current position
-            local pos = self.tasks[1].params[1]
-            self.tasks[1].params[1] = gps_tools.getRelativeDistance(pos, self.position)
+            local pos = firstTask.params[1]
+            firstTask.params[1] = gps_tools.addPosition(pos, self.jobStartingPos)
+            firstTask.fn = "travelTo"
         end
         self:execTasks()
     end
+end
+
+function Miner:move(axis, distance, ...)
+    if distance == 0 then return true end
+    local posUpdate, movement, miningDir
+    local dirs = {
+        x = {
+            pos = { name = "N", movement = turtle.forward, mine = "forward" },
+            neg = { name = "S", movement = turtle.forward, mine = "forward" }
+        },
+        y = {
+            pos = { name = "E", movement = turtle.forward, mine = "forward" },
+            neg = { name = "W", movement = turtle.forward, mine = "forward" }
+        },
+        z = {
+            pos = { name = "U", movement = turtle.up, mine = "up" },
+            neg = { name = "D", movement = turtle.down, mine = "down" }
+        }
+    }
+    if distance > 0 then
+        self:setDirection(dirs[axis].pos.name)
+        movement = dirs[axis].pos.movement
+        posUpdate = -1
+        miningDir = dirs[axis].pos.mine
+    elseif distance < 0 then
+        self:setDirection(dirs[axis].neg.name)
+        movement = dirs[axis].neg.movement
+        posUpdate = 1
+        miningDir = dirs[axis].neg.mine
+    end
+    while distance ~= 0 do
+        if self.force then
+            turtle_tools.mine(miningDir)
+        end
+        if movement() then
+            distance = distance + posUpdate
+            local currentPos = self.position[axis]
+            self.position[axis] = currentPos - posUpdate
+            self:saveState()
+            self:doActions(...)
+        end
+    end
+    return distance
 end
 
 -- Travel by given positions and stand in given direction
@@ -123,11 +197,11 @@ end
 -- direction is a coordinal direction between N, S, E, W
 -- return true if travel was ok, else return false
 function Miner:travelBy(position, ...)
-    local ok, _ = self:move("X", position.x, ...)
+    local ok, _ = self:move("x", position.x, ...)
     if ok then
-        ok, _ = self:move("Y", position.y, ...)
+        ok, _ = self:move("y", position.y, ...)
         if ok then
-            ok, _ = self:move("Z", position.z, ...)
+            ok, _ = self:move("z", position.z, ...)
             if ok then
                 return self:setDirection(position.d)
             end
@@ -174,49 +248,6 @@ function Miner:followMap(map, startPos)
     until index.x > #map[y] or index.x == 0 or index.y > #map or index.y == 0
 end
 
-function Miner:move(axis, distance, ...)
-    if distance == 0 then return true end
-    local posUpdate, movement, miningDir
-    local dirs = {
-        X = {
-            pos = { name = "N", movement = turtle.forward, mine = "forward" },
-            neg = { name = "S", movement = turtle.forward, mine = "forward" }
-        },
-        Y = {
-            pos = { name = "E", movement = turtle.forward, mine = "forward" },
-            neg = { name = "W", movement = turtle.forward, mine = "forward" }
-        },
-        Z = {
-            pos = { name = "U", movement = turtle.up, mine = "up" },
-            neg = { name = "D", movement = turtle.down, mine = "down" }
-        }
-    }
-    if distance > 0 then
-        self:setDirection(dirs[axis].pos.name)
-        movement = dirs[axis].pos.movement
-        posUpdate = -1
-        miningDir = dirs[axis].pos.mine
-    elseif distance < 0 then
-        self:setDirection(dirs[axis].neg.name)
-        movement = dirs[axis].neg.movement
-        posUpdate = 1
-        miningDir = dirs[axis].neg.mine
-    end
-    while distance ~= 0 do
-        if self.force then
-            turtle_tools.mine(miningDir)
-        end
-        if movement() then
-            distance = distance + posUpdate
-            local currentPos = self.position[dirs[axis].name]
-            self.position[dirs[axis].name] = currentPos - posUpdate
-            self:saveState()
-            self:doActions(...)
-        end
-    end
-    return distance
-end
-
 -- execute additionnal action functions passed in varargs by their name (string)
 function Miner:doActions(...)
     local varargs = { ... }
@@ -228,26 +259,27 @@ end
 -- Turn the turtle left or right
 -- Keep track of the turtle direction accordingly
 function Miner:turn(side)
-    local ind = self.directionIndex[self.position.d]
-    local ok
+    local ind = gps_tools.directionIndex[self.position.d]
+    local action
     if side == "left" then
-        ok, _ = turtle.turnLeft()
-        if ok then
-            ind = ind - 1
-        end
+        -- ok, _ = turtle.turnLeft()
+        action = turtle.turnLeft
+        ind = ind - 1
     else
-        ok, _ = turtle.turnRight()
-        if ok then
-            ind = ind + 1
-        end
+        action = turtle.turnRight
+        ind = ind + 1
     end
     if ind == 0 then
         self.position.d = "W"
     elseif ind == 5 then
         self.position.d = "N"
     else
-        self.position.d = self.directions[ind]
+        self.position.d = gps_tools.directions[ind]
     end
+    self:saveState()
+    -- Turn last because it take time and turtle could most likely be
+    -- interrupted during that time
+    local ok, _ = action()
     return ok
 end
 
@@ -279,8 +311,7 @@ function Miner:setDirection(direction)
             end
         end
     until turnNum == 0
-    self.position.d = direction
-    self:saveState()
+    -- self.position.d = direction
     return true
 end
 

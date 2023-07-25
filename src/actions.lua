@@ -1,4 +1,4 @@
-local config = require "src.config"
+local config = require "config"
 local turtle_tools = require "turtle_tools"
 local gps_tools = require "gps_tools"
 local lib = {}
@@ -42,7 +42,9 @@ end
 
 function lib.refuelOnLava()
     if turtle_tools.collectLava() then
+        print(turtle.getFuelLevel())
         turtle.refuel()
+        print("lava", turtle.getFuelLevel())
     end
 end
 
