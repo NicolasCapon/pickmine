@@ -4,7 +4,6 @@ local turtle_tools = require("turtle_tools")
 -- MAIN
 
 local miner = Miner:new()
-print("miner is busy ?", miner:isBusy())
 if miner:isBusy() then
     miner:resumePendingTasks()
 else
